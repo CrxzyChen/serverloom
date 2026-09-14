@@ -1,0 +1,14 @@
+<script setup>
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { Gauge, RefreshCw } from 'lucide-vue-next'
+import { quotaBuckets, remaining, duration } from '../lib/quotas.mjs'
+const props=defineProps({value:Object,error:String,updated:Number,loading:Boolean,plan:String})
+const emit=defineEmits(['refresh'])
+const open=ref(false),now=ref(Date.now()),root=ref(null)
+const buckets=computed(()=>quotaBuckets(props.value)),primary=computed(()=>buckets.value.find(b=>b.limitId==='codex')||buckets.value[0])
+const summary=computed(()=>{const window=primary.value?.primary,percent=remaining(window);return percent==null?'余量暂不可用':`${duration(window.windowDurationMins)} · 剩余 ${Math.round(percent)}%`})
+function countdown(seconds){if(!Number.isFinite(seconds))return '重置时间暂不可用';const left=Math.max(0,Math.ceil((seconds*1000-now.value)/60000));return left?`${Math.floor(left/60)} 小时 ${left%60} 分钟后重置`:'已到重置时间，等待刷新'}
+function outside(event){if(!root.value?.contains(event.target))open.value=false}
+let timer;onMounted(()=>{timer=setInterval(()=>now.value=Date.now(),30000);document.addEventListener('pointerdown',outside)});onUnmounted(()=>{clearInterval(timer);document.removeEventListener('pointerdown',outside)})
+</script>
+<template><div class="quota-status" ref="root" @keydown.esc="open=false"><button type="button" aria-label="查看套餐余量" :aria-expanded="open" :title="(plan||'套餐')+' · '+summary+(error?' · 更新失败':'')" @click="open=!open"><Gauge :size="14"/><span class="quota-summary">{{ plan||'套餐' }} · {{ summary }}</span><span v-if="error" class="quota-stale">!</span></button><section v-if="open" class="quota-popover" aria-label="套餐余量详情"><div class="quota-heading"><strong>{{ plan||primary?.planType||'账号' }} · 套餐余量</strong><button aria-label="刷新套餐余量" :disabled="loading" @click="emit('refresh')"><RefreshCw :size="14"/></button></div><p v-if="loading">正在刷新…</p><p v-if="error" class="form-error">{{ error }}{{ updated?' · 保留上次结果':'' }}</p><p v-if="!buckets.length&&!loading">当前账号暂无可用额度数据</p><div v-for="bucket in buckets" :key="bucket.limitId" class="quota-bucket"><strong>{{ bucket.limitName||bucket.limitId||'Codex' }}</strong><div v-for="key in ['primary','secondary']" :key="key" class="quota-window"><div><span>{{ bucket[key]?.windowDurationMins ? duration(bucket[key].windowDurationMins) : key==='primary'?'主要窗口':'次要窗口' }}</span><b>{{ remaining(bucket[key])==null?'暂不可用':Math.round(remaining(bucket[key]))+'% 剩余' }}</b></div><meter v-if="remaining(bucket[key])!=null" :value="remaining(bucket[key])" min="0" max="100" :aria-label="duration(bucket[key]?.windowDurationMins)+' 剩余额度'"/><small>{{ countdown(bucket[key]?.resetsAt) }}</small><time v-if="Number.isFinite(bucket[key]?.resetsAt)">{{ new Date(bucket[key].resetsAt*1000).toLocaleString('zh-CN') }}</time></div></div><small v-if="updated">更新于 {{ new Date(updated).toLocaleTimeString('zh-CN') }} · 账号共享额度</small></section></div></template>

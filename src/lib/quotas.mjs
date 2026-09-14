@@ -1,0 +1,3 @@
+export function quotaBuckets(response) { const map=response?.rateLimitsByLimitId; return map&&Object.keys(map).length ? Object.entries(map).map(([id,b])=>({...b,limitId:b.limitId||id})) : response?.rateLimits?[response.rateLimits]:[] }
+export function remaining(window) { return typeof window?.usedPercent==='number'&&Number.isFinite(window.usedPercent)?Math.min(100,Math.max(0,100-window.usedPercent)):null }
+export function duration(minutes) { if(!Number.isFinite(minutes)||minutes<=0)return '额度窗口';if(minutes===10080)return '每周';if(minutes%1440===0)return `${minutes/1440} 天`;if(minutes%60===0)return `${minutes/60} 小时`;return `${minutes} 分钟` }

@@ -1,0 +1,45 @@
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const { trustedKeys, remotePath, dimensions } = require('../electron/workbench.cjs')
+test('host verification rejects unknown and revoked keys, including matching revoked entries', () => {
+  const key = Buffer.from('public key'), other = Buffer.from('other')
+  const line = `host ssh-ed25519 ${key.toString('base64')}`
+  assert.equal(trustedKeys(`# comment\n${line}`)(key), true)
+  assert.equal(trustedKeys(line)(other), false)
+  assert.equal(trustedKeys(`${line}\n@revoked ${line}`)(key), false)
+  assert.equal(trustedKeys(`@cert-authority ${line}`)(key), false)
+})
+test('file paths and PTY sizes reject invalid values', () => {
+  assert.equal(remotePath('/var/log/../tmp'), '/var/tmp')
+  for (const path of ['relative', '/bad\0name', '/bad\nname']) assert.throws(() => remotePath(path))
+  dimensions(120, 40)
+  for (const [cols, rows] of [[0, 10], [80, 501], ['80', 24]]) assert.throws(() => dimensions(cols, rows))
+})
+test('network rates use remote monotonic time, exclude new/reset interfaces', async () => {
+  const { parseNetwork, networkRates } = await import('../src/lib/bandwidth.mjs')
+  const sample = (time, rx, tx) => parseNetwork(`${time} 0\neth0: ${rx} 0 0 0 0 0 0 0 ${tx} 0 0 0 0 0 0 0`)
+  assert.deepEqual(networkRates(sample(10, 100, 20), sample(12, 300, 120)), [{ name: 'eth0', rx: 100, tx: 50 }])
+  assert.deepEqual(networkRates(sample(10, 100, 20), sample(12, 1, 1)), [])
+  assert.deepEqual(networkRates(sample(10, 100, 20), sample(9, 300, 120)), [])
+  assert.throws(() => parseNetwork('not valid'))
+})
+test('file transfer refuses overwrites, downloads exact bytes and bounds previews', async () => {
+  const fs = require('node:fs'), fsp = require('node:fs/promises'), { tmpdir } = require('node:os'), { join } = require('node:path')
+  const { Workbench } = require('../electron/workbench.cjs')
+  const root = await fsp.mkdtemp(join(tmpdir(), 'workbench-transfer-')), source = join(root, 'source.txt'), destination = join(root, 'remote.txt'), download = join(root, 'download.txt')
+  await fsp.writeFile(source, 'transfer verification')
+  const audit = [], manager = new Workbench({ record: async e => audit.push(e) }, () => {})
+  manager.sessions.set('files', { kind: 'files', server: { name: 'test' }, sftp: {
+    createWriteStream: (_, options) => fs.createWriteStream(destination, options),
+    createReadStream: (_, options) => fs.createReadStream(destination, options),
+    fastGet: (_, local, callback) => fs.copyFile(destination, local, callback)
+  } })
+  await manager.transfer('files', '/remote.txt', source, true)
+  await assert.rejects(manager.transfer('files', '/remote.txt', source, true), /EEXIST/)
+  await manager.transfer('files', '/remote.txt', download, false)
+  assert.equal(await fsp.readFile(download, 'utf8'), 'transfer verification')
+  await fsp.writeFile(destination, 'x'.repeat(300000))
+  const preview = await manager.preview('files', '/remote.txt')
+  assert.equal(preview.truncated, true); assert.equal(preview.text.length, 262144)
+  assert.equal(audit.length, 2)
+})
