@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtemp, writeFile } = require('node:fs/promises')
+const { mkdtemp, writeFile, realpath } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 const { execFile } = require('node:child_process')
@@ -9,7 +9,8 @@ const { generateKeyPairSync, createHash } = require('node:crypto')
 const { protectFile, prepareManagedKey, setManagedKeyDirectory } = require('../electron/key-permissions.cjs')
 const exec=promisify(execFile)
 test('managed Windows keys lose unrelated explicit access and become acceptable to OpenSSH', {skip:process.platform!=='win32'}, async()=>{
- const dir=await mkdtemp(join(tmpdir(),'serverloom-acl-')),file=join(dir,'synthetic key'),outside=join(tmpdir(),'external-'+Date.now()+'.fixture')
+ // Hosted Windows runners may expose TEMP through an 8.3 alias; use a canonical managed root.
+ const dir=await realpath(await mkdtemp(join(tmpdir(),'serverloom-acl-'))),file=join(dir,'synthetic key'),outside=join(tmpdir(),'external-'+Date.now()+'.fixture')
  const bytes=generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs1',format:'pem'})
  await writeFile(file,bytes);await writeFile(outside,'synthetic external fixture')
  const system=join(process.env.SystemRoot,'System32')
