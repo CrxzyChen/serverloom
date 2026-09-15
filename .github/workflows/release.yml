@@ -54,6 +54,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release already exists; preserving its assets and publication state."
+            exit 0
+          fi
           flags=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" release/* --verify-tag --draft --title "ServerLoom $GITHUB_REF_NAME" --notes "See the bundled release notes and project documentation. Review assets before publishing." "${flags[@]}"

@@ -43,6 +43,7 @@ if (primaryInstance) app.whenReady().then(async () => {
   store = new Store(join(app.getPath('userData'), 'servers.json'))
   attachments = new Attachments(store, join(app.getPath('userData'), 'attachments'))
   copilot = new Copilot(runtime, store, attachments)
+  require('./key-permissions.cjs').setManagedKeyDirectory(join(app.getPath('userData'), 'imported-credentials'))
   migration = new Migration(store, join(app.getPath('userData'), 'imported-credentials'))
   async function migrationJob(fn) { if (migrationBusy) throw new Error('请等待当前迁移操作完成'); migrationBusy = true; try { return await fn() } finally { migrationBusy = false } }
   workbench = new Workbench(store, event => window?.webContents.send('runtime:event', event))
@@ -64,6 +65,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     await scheduleApprovals.check(run,params,signal)
     if(params.tool.startsWith('schedules_')) return executeScheduleTool(scheduler,params)
     const result = await tools.execute(params, signal)
+    if (params.tool === 'servers_list') return { ...result, contextServerId: run.value?.serverId || (run.task?.serverIds?.length === 1 ? run.task.serverIds[0] : null), contextSource: '当前任务绑定的服务器；全局或多服务器任务为空' }
     return result
   }
   const record = entry => store.record(entry).catch(error => window?.webContents.send('runtime:event', { method: 'runtime/storageError', params: { message: error.message } }))

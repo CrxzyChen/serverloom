@@ -1,6 +1,6 @@
 {
   "name": "serverloom",
-  "version": "0.10.0-alpha.3",
+  "version": "0.10.0-alpha.4",
   "description": "AI-assisted desktop server operations with SSH, SFTP and local scheduling",
   "private": true,
   "main": "electron/main.cjs",

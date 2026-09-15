@@ -55,3 +55,13 @@ Unit tests cover version/channel selection, failure recovery, waiting for tasks 
 ### alpha.3 migration compatibility fix
 
 The product rename accidentally changed AES-GCM additional authenticated data while retaining connection-package version 1. Original Servers packages therefore failed authentication in alpha.1/alpha.2 even with the correct passphrase. alpha.3 accepts both known historical contexts, requiring full GCM authentication for each, and writes the original immutable protocol context. Passphrases are used exactly as entered, including spaces and Unicode; no trimming, normalization or authentication bypass is applied. Existing files do not need to be re-exported. Import using alpha.3 or later on the destination computer.
+
+
+### alpha.4 SSH permissions and server context
+
+Windows imported credentials now receive a fresh owner-only protected DACL rather than retaining unrelated explicit access entries. Previously imported application-managed keys are repaired before use, without changing key bytes or remote authorized_keys. External private-key files are not modified automatically. OpenSSH failures distinguish local permissions, unreadable keys, invalid format, passphrase requirements and remote authentication rejection.
+
+The SSH terminal uses ssh2; probes and remote commands use system OpenSSH. Their local private-key permission checks differ. A terminal connection therefore does not prove that OpenSSH can load the same file. Resource shortcuts now bind the selected server to the Copilot conversation, and server-list tool results include the current task's server context.
+
+
+alpha.4 validation: 69 unit tests passed. A synthetic Windows RSA key with an unrelated explicit read ACE was rejected by the system ssh-keygen, accepted after managed-key preparation, and retained its original content hash. An external fixture's ACL was unchanged. Real Electron tests verified selected-server shortcut binding, target switching and legacy migration import. No production server credentials or ACLs were modified during development.

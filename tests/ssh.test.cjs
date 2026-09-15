@@ -48,6 +48,10 @@ test('private-key paths reject public keys, relative paths, directories and miss
   await assert.rejects(validateKeyPath(join(tmpdir(), 'nonexistent-' + Date.now())))
 })
 test('connection failures retain actionable categories without bypassing host verification', () => {
+  assert.equal(classifyFailure({}, 'WARNING: UNPROTECTED PRIVATE KEY FILE!\nLoad key "key": bad permissions\nPermission denied (publickey).').reason, 'key_permissions')
+  assert.equal(classifyFailure({}, 'Load key "key": Permission denied').reason, 'key_unreadable')
+  assert.equal(classifyFailure({}, 'Load key "key": invalid format\nPermission denied (publickey).').reason, 'key_format')
+  assert.equal(classifyFailure({}, 'Load key "key": incorrect passphrase supplied to decrypt private key').reason, 'key_passphrase')
   assert.equal(classifyFailure({}, 'Host key verification failed.').reason, 'host_key_untrusted')
   assert.equal(classifyFailure({}, 'REMOTE HOST IDENTIFICATION HAS CHANGED').reason, 'host_key_changed')
   assert.equal(classifyFailure({}, 'Permission denied (publickey)').reason, 'authentication')

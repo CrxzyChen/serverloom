@@ -2,7 +2,7 @@
 
 **A desktop workspace for AI-assisted server operations.**
 
-ServerLoom brings your server inventory, SSH terminals, SFTP files, bandwidth monitoring and a Codex-powered Copilot into one Electron + Vue 3 app. The current alpha build is **0.10.0-alpha.3**, for Windows x64.
+ServerLoom brings your server inventory, SSH terminals, SFTP files, bandwidth monitoring and a Codex-powered Copilot into one Electron + Vue 3 app. The current alpha build is **0.10.0-alpha.4**, for Windows x64.
 
 > Alpha software: start with a non-production server. Remote commands run with the permissions of your SSH account. This is an independent project, not an official OpenAI product.
 

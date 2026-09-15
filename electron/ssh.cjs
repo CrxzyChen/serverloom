@@ -1,3 +1,4 @@
+const { prepareManagedKey } = require('./key-permissions.cjs')
 const { execFile } = require('node:child_process')
 const { stat } = require('node:fs/promises')
 const { isAbsolute, join } = require('node:path')
@@ -6,6 +7,7 @@ async function validateKeyPath(path) {
   if (typeof path !== 'string' || !isAbsolute(path) || /[\r\n\0]/.test(path)) throw new Error('请提供私钥的本机绝对路径，不是私钥内容')
   if (/\.pub$/i.test(path)) throw new Error('这是公钥文件，请使用不带 .pub 的私钥文件')
   if (!(await stat(path)).isFile()) throw new Error('私钥路径必须指向本机文件')
+  await prepareManagedKey(path)
   return path
 }
 const probeCommand = "printf 'SERVERS_CONNECTION_OK\\n'; id -un; uname -s"
@@ -37,7 +39,12 @@ function classifyFailure(error, stderr = '') {
   if (error.code === 'ENOENT') return { status: 'failed', reason: 'ssh_missing', message: '本机未安装 OpenSSH 客户端' }
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(stderr)) return { status: 'failed', reason: 'host_key_changed', message: '服务器主机指纹发生变化，请核实后更新 known_hosts；未绕过验证' }
   if (/Host key verification failed|No .*host key is known/i.test(stderr)) return { status: 'failed', reason: 'host_key_untrusted', message: '尚未信任此服务器主机指纹，请先核实并通过 SSH 确认一次' }
-  if (/Permission denied|Load key|invalid format|bad permissions/i.test(stderr)) return { status: 'failed', reason: 'authentication', message: '私钥认证失败：检查用户名、公钥是否已安装、文件权限；有口令的私钥需先解锁到 SSH Agent' }
+  if (/UNPROTECTED PRIVATE KEY FILE|bad permissions|permissions .* (?:too open|too permissive)|Bad owner or permissions/i.test(stderr)) return { status: 'failed', reason: 'key_permissions', message: '本机私钥权限过宽，OpenSSH 拒绝加载；尚不能判断服务器是否接受密钥，无需重建。应用导入的私钥会自动收紧权限；外部私钥需先修复本机权限。' }
+  if (/Load key .*Permission denied|Identity file .*not accessible/i.test(stderr)) return { status: 'failed', reason: 'key_unreadable', message: '本机私钥文件无法读取，请检查路径和访问权限；尚未验证服务器认证' }
+  if (/invalid format|error in libcrypto/i.test(stderr)) return { status: 'failed', reason: 'key_format', message: '本机私钥格式无法识别，请核对是否选中了正确的私钥文件' }
+  if (/Load key .*incorrect passphrase|encrypted private key|passphrase/i.test(stderr)) return { status: 'failed', reason: 'key_passphrase', message: '私钥需要口令，请先解锁到 SSH Agent 并选择 SSH Agent 认证' }
+  if (/Permission denied/i.test(stderr)) return { status: 'failed', reason: 'authentication', message: '服务器未接受此次 SSH 认证；请核对用户名与已授权的公钥，这不能证明私钥损坏' }
+  if (/Load key/i.test(stderr)) return { status: 'failed', reason: 'key_load', message: '本机未能加载私钥，请检查密钥格式、口令和访问权限；不要直接重建密钥' }
   if (error.killed || /timed out/i.test(stderr)) return { status: 'failed', reason: 'timeout', message: '连接超时，请检查地址、端口和网络' }
   if (/Connection refused/i.test(stderr)) return { status: 'failed', reason: 'refused', message: '服务器拒绝连接，请检查 SSH 服务和端口' }
   return { status: 'failed', reason: 'ssh_error', message: 'SSH 测试失败，请检查连接配置', detail: stderr.trim().slice(0, 2000) }
@@ -114,7 +121,7 @@ async function executeCommand(server, command, timeoutMs = 30000, signal, runner
     runner(binary, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 262144, encoding: 'utf8', signal }, (error, stdout, stderr) => {
       const truncated = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
       const status = signal?.aborted || error?.name === 'AbortError' ? 'canceled' : truncated ? 'output_limit' : error?.killed ? 'timeout' : error ? 'failed' : 'completed'
-      resolve({ status, exitCode: !error ? 0 : Number.isInteger(error.code) ? error.code : null, stdout: stdout || '', stderr: stderr || '', truncated, checkedAt: new Date().toISOString(), durationMs: Date.now() - started, message: error ? (status === 'failed' && error.code === 255 ? classifyFailure(error, stderr).message : error.message) : '远程命令执行完成', persistentSession: false, cancellationScope: '超时或停止会关闭本地 SSH 进程；已产生的远程变更不会撤销，远程后台任务可能继续运行' })
+      resolve({ ...(error?.code === 255 ? classifyFailure(error, stderr) : {}), status, exitCode: !error ? 0 : Number.isInteger(error.code) ? error.code : null, stdout: stdout || '', stderr: stderr || '', truncated, checkedAt: new Date().toISOString(), durationMs: Date.now() - started, message: error ? (status === 'failed' && error.code === 255 ? classifyFailure(error, stderr).message : error.message) : '远程命令执行完成', persistentSession: false, cancellationScope: '超时或停止会关闭本地 SSH 进程；已产生的远程变更不会撤销，远程后台任务可能继续运行' })
     })
   })
 }

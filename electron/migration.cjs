@@ -1,3 +1,4 @@
+const { protectFile } = require('./key-permissions.cjs')
 const { randomBytes, randomUUID, scrypt, createCipheriv, createDecipheriv, createHash } = require('node:crypto')
 const { promisify } = require('node:util')
 const { execFile } = require('node:child_process')
@@ -69,13 +70,7 @@ function validatePayload(payload) {
     return { config, hasNotes: Object.hasOwn(entry.config || {}, 'notes'), privateKey, hostKeys: hosts.map(k => ({ type: k.type, data: k.data })) }
   })
 }
-async function protectFile(file) {
-  if (process.platform !== 'win32') return
-  const system = process.env.SystemRoot || 'C:\\Windows'
-  const { stdout } = await exec(join(system, 'System32/whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, timeout: 5000 })
-  const sid = stdout.match(/S-1-\d+(?:-\d+)+/)?.[0]; if (!sid) throw new Error('无法设置私钥访问权限')
-  await exec(join(system, 'System32/icacls.exe'), [file, '/inheritance:r', '/grant:r', `*${sid}:(F)`], { windowsHide: true, timeout: 5000 })
-}
+
 class Migration {
   constructor(store, directory, readHosts = hostKeys) { this.store = store; this.directory = directory; this.readHosts = readHosts; this.pending = new Map() }
   clear() { for (const token of this.pending.keys()) this.discard(token) }
