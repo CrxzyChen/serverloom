@@ -1,0 +1,58 @@
+import {_electron as electron} from 'playwright'
+import {mkdtemp,writeFile} from 'node:fs/promises'
+import {resolve} from 'node:path'
+import assert from 'node:assert/strict'
+const data=await mkdtemp(resolve('artifacts/update-ui-'))
+const app=await electron.launch({args:['.'],env:{...process.env,SERVERS_TEST_DATA:data,SERVERS_DEV:'0'}})
+try {
+ const page=await app.firstWindow(),errors=[];page.on('pageerror',e=>errors.push(e.message))
+ await page.getByRole('heading',{name:'选择服务器，开始工作。'}).waitFor()
+ await page.waitForFunction(async()=>!!(await window.servers.updateSnapshot()))
+ await page.getByRole('button',{name:'软件更新',exact:true}).click()
+ await page.getByRole('heading',{name:'关于与更新'}).waitFor()
+ await page.getByLabel('自动检查更新',{exact:true}).uncheck()
+ await page.getByLabel('更新通道',{exact:true}).selectOption('stable')
+ await page.waitForFunction(async()=>(await window.servers.updateSnapshot()).channel==='stable')
+ await page.reload();await page.getByRole('button',{name:'软件更新',exact:true}).click()
+ assert.equal(await page.getByLabel('更新通道',{exact:true}).inputValue(),'stable')
+ // Replace only release transport; real IPC, update state, settings persistence and rendering.
+ await app.evaluate(()=>{
+  const require=process.getBuiltinModule('module').createRequire(process.cwd()+'/package.json')
+  const {Updates}=require('./electron/updates.cjs'),original=Updates.prototype.snapshot
+  Updates.prototype.snapshot=function(){global.testUpdates=this;return original.call(this)}
+ })
+ await page.evaluate(()=>window.servers.updateSnapshot())
+ await app.evaluate(()=>{global.testUpdates.fetch=async()=>({ok:true,json:async()=>[{tag_name:'v0.11.0',body:'## 更新内容\n\n- 改进任务恢复\n\n<script>throw Error("untrusted")</script>'}]})})
+ await page.getByRole('button',{name:'检查更新',exact:true}).click()
+ await page.getByText('新版本 0.11.0',{exact:true}).waitFor()
+ await page.getByText('查看更新日志',{exact:true}).click()
+ await page.getByRole('heading',{name:'更新内容',exact:true}).waitFor()
+ await page.screenshot({path:'artifacts/update-settings.png'})
+ await app.evaluate(()=>{const u=global.testUpdates;u.set({installed:true,phase:'available'});u.updater={downloadUpdate:async()=>{u.set({progress:48});await new Promise(r=>{global.finishDownload=r})}}})
+ await page.getByRole('button',{name:'下载更新',exact:true}).click()
+ await page.getByText('正在下载并校验 48%',{exact:true}).waitFor()
+ await app.evaluate(()=>global.finishDownload())
+ await page.getByRole('button',{name:'重启并更新',exact:true}).waitFor()
+ await app.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:1});global.testUpdates.activity=()=>({tasks:1,operations:1,sessions:2})})
+ await page.getByRole('button',{name:'重启并更新',exact:true}).click()
+ await page.getByRole('button',{name:'取消等待',exact:true}).waitFor()
+ const blocked=await page.evaluate(async()=>{try{await window.servers.send({conversationId:'blocked',text:'no dispatch'});return false}catch{return true}});assert.equal(blocked,true)
+ const transferBlocked=await page.evaluate(async()=>{try{await window.servers.transferFile('x','/tmp/file',true);return false}catch(e){return e.message.includes('更新')}});assert.equal(transferBlocked,true)
+ await page.screenshot({path:'artifacts/update-waiting.png'})
+ await page.getByRole('button',{name:'取消等待',exact:true}).click()
+ assert.equal(await app.evaluate(()=>global.testUpdates.blockNew),false)
+ await app.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];w.setSize(960,720);w.webContents.setZoomFactor(1.25)})
+ await page.waitForTimeout(400)
+ await page.getByRole('button',{name:'软件更新',exact:true}).click()
+ await page.waitForTimeout(200)
+ assert.equal(await page.locator('.update-status span').isVisible(),false)
+ const compact=await app.evaluate(async({BrowserWindow})=>(await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toDataURL())
+ await writeFile('artifacts/update-compact.png',Buffer.from(compact.split(',')[1],'base64'))
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
+ await app.evaluate(()=>{global.testUpdates.set({phase:'idle',available:null});global.testUpdates.fetch=async()=>{throw Error('offline')}})
+ await page.getByRole('button',{name:'检查更新',exact:true}).click()
+ await page.getByText('无法检查更新，请检查网络或稍后重试；发布源可能尚未就绪。',{exact:true}).waitFor()
+ const rect=await page.getByRole('button',{name:'检查更新',exact:true}).boundingBox();assert.ok(rect.x+rect.width <= await page.evaluate(()=>innerWidth),'update action fits narrow viewport')
+ assert.deepEqual(errors,[])
+ console.log('PASS update settings persistence, Markdown, progress, wait/cancel, blocked IPC, compact layout and error recovery')
+} finally { await app.close() }

@@ -1,3 +1,5 @@
+> For 0.10.0-alpha.2 installer/update behavior and the current build procedure, see [Software updates](updates.md). The records below describe the original alpha.1 baseline.
+
 # Alpha release validation
 
 Version: `0.10.0-alpha.1` / Windows x64.

@@ -1,7 +1,9 @@
 import { _electron as electron } from 'playwright'
 import { resolve } from 'node:path'
+import { mkdtemp } from 'node:fs/promises'
 import assert from 'node:assert/strict'
-const app = await electron.launch({ executablePath: resolve(process.argv[2] || 'release-alpha/win-unpacked/ServerLoom.exe') })
+const data = await mkdtemp(resolve('artifacts/package-smoke-'))
+const app = await electron.launch({ args: ['--user-data-dir=' + data], executablePath: resolve(process.argv[2] || 'release-alpha/win-unpacked/ServerLoom.exe') })
 try {
   const page = await app.firstWindow()
   await app.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];w.setSize(1360,900);w.webContents.setZoomFactor(1)})

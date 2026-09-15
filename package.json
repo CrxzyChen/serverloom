@@ -1,6 +1,6 @@
 {
   "name": "serverloom",
-  "version": "0.10.0-alpha.1",
+  "version": "0.10.0-alpha.3",
   "description": "AI-assisted desktop server operations with SSH, SFTP and local scheduling",
   "private": true,
   "main": "electron/main.cjs",
@@ -17,13 +17,17 @@
     "brand:render": "electron scripts/render-logo.cjs",
     "runtime:fetch": "node scripts/fetch-runtime.mjs",
     "privacy:check": "node scripts/privacy-check.mjs",
-    "notices": "node scripts/third-party-notices.mjs"
+    "notices": "node scripts/third-party-notices.mjs",
+    "dist": "npm run build && node scripts/build-release.mjs",
+    "release:check": "node scripts/check-release.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
+    "electron-updater": "6.8.9",
     "lucide-vue-next": "^0.468.0",
     "markdown-it": "15.0.2",
+    "semver": "7.8.5",
     "ssh2": "1.17.0",
     "vue": "^3.5.0"
   },
@@ -39,7 +43,7 @@
     "productName": "ServerLoom",
     "beforePack": "./scripts/verify-bundle.cjs",
     "directories": {
-      "output": "release-alpha"
+      "output": "release-update"
     },
     "files": [
       "dist/**/*",
@@ -61,7 +65,23 @@
       "target": "nsis",
       "icon": "resources/branding/servers.ico"
     },
-    "artifactName": "ServerLoom-${version}-${arch}.${ext}"
+    "artifactName": "ServerLoom-${version}-${arch}.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "CrxzyChen",
+        "repo": "serverloom",
+        "releaseType": "draft"
+      }
+    ],
+    "generateUpdatesFilesForAllChannels": true,
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "ServerLoom-Setup-${version}-${arch}.${ext}"
+    }
   },
   "license": "MIT",
   "author": "ServerLoom contributors"

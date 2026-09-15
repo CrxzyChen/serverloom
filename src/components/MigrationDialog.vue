@@ -8,7 +8,7 @@ let previousFocus
 function reset() { passphrase.value = ''; repeat.value = ''; includeKeys.value = false; includeNotes.value = false; error.value = ''; rows.value = null; choices.value = []; trust.value = false }
 function show() { previousFocus = document.activeElement; dialog.value.showModal(); nextTick(() => dialog.value.querySelector('input')?.focus()) }
 function openExport(selectedIds) { reset(); ids.value = selectedIds; mode.value = 'export'; show() }
-async function openImport(file) { if (busy.value || dialog.value.open) return; reset(); mode.value = 'import'; show(); busy.value = true; try { staged.value = await window.servers.selectMigration(file); if (!staged.value) { busy.value = false; close() } } catch (e) { error.value = e.message } finally { busy.value = false } }
+async function openImport(file) { if (busy.value || dialog.value.open) return; reset(); mode.value = 'import'; show(); busy.value = true; try { staged.value = await window.servers.selectMigration(file); if (!staged.value) { busy.value = false; close() } } catch (e) { error.value = e.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') } finally { busy.value = false } }
 function close() { if (busy.value) return; if (staged.value) window.servers.discardMigration(staged.value.token); staged.value = null; reset(); dialog.value.close(); previousFocus?.focus() }
 async function run() {
   busy.value = true; error.value = ''
@@ -23,7 +23,7 @@ async function run() {
     } else {
       const result = await window.servers.commitMigration({ token: staged.value.token, choices: [...choices.value], trustHosts: trust.value }); staged.value = null; emit('changed'); emit('notice', `已导入 ${result.imported} 台服务器，选择服务器即可打开或测试连接`); busy.value = false; close()
     }
-  } catch (e) { error.value = e.message; if (mode.value === 'import') passphrase.value = '' } finally { busy.value = false }
+  } catch (e) { error.value = e.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, ''); if (mode.value === 'import') passphrase.value = '' } finally { busy.value = false }
 }
 defineExpose({ openExport, openImport })
 </script>

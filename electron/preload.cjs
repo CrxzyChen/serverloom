@@ -1,5 +1,12 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron')
 contextBridge.exposeInMainWorld('servers', {
+  updateSnapshot: () => ipcRenderer.invoke('updates:snapshot'),
+  updateSettings: value => ipcRenderer.invoke('updates:settings', value),
+  checkUpdate: () => ipcRenderer.invoke('updates:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updates:download'),
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
+  cancelUpdate: () => ipcRenderer.invoke('updates:cancel'),
+  openRelease: () => ipcRenderer.invoke('updates:release'),
   schedulerSnapshot: () => ipcRenderer.invoke('scheduler:snapshot'),
   saveSchedule: value => ipcRenderer.invoke('scheduler:save', value),
   removeSchedule: id => ipcRenderer.invoke('scheduler:remove', id),

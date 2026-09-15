@@ -2,7 +2,7 @@
 
 **A desktop workspace for AI-assisted server operations.**
 
-ServerLoom brings your server inventory, SSH terminals, SFTP files, bandwidth monitoring and a Codex-powered Copilot into one Electron + Vue 3 app. The first public release is **0.10.0-alpha.1**, for Windows x64.
+ServerLoom brings your server inventory, SSH terminals, SFTP files, bandwidth monitoring and a Codex-powered Copilot into one Electron + Vue 3 app. The current alpha build is **0.10.0-alpha.3**, for Windows x64.
 
 > Alpha software: start with a non-production server. Remote commands run with the permissions of your SSH account. This is an independent project, not an official OpenAI product.
 
@@ -10,12 +10,13 @@ ServerLoom brings your server inventory, SSH terminals, SFTP files, bandwidth mo
 
 ## Download
 
-Download the Windows portable ZIP from [Releases](https://github.com/CrxzyChen/serverloom/releases). Extract the **entire archive**, then run `ServerLoom.exe`; do not move the executable away from its resources folder.
+Download the Windows installer (recommended for in-app updates) or portable ZIP from [Releases](https://github.com/CrxzyChen/serverloom/releases). For the portable edition, extract the **entire archive**, then run `ServerLoom.exe`; do not move the executable away from its resources folder.
 
 The release includes the public upstream Codex 0.154.0 runtime. Sign in with your own supported account. Model access and usage limits depend on that account; no account, credentials, API keys or server connections are included.
 
 ## Features
 
+- In-app updates: Stable/Alpha channels, download progress, restart coordination and preserved queued tasks. [Update behavior and publishing](docs/updates.md).
 - Server inventory, groups, direct SSH/SFTP/bandwidth tabs and encrypted connection export/import.
 - Independent Copilot panel with conversation history, Markdown, attachments, model/reasoning selectors and Agent/Plan modes.
 - Native plan/goal status and account usage in the status bar, when supported by the runtime/account.
@@ -51,10 +52,11 @@ npm run dev
 ```sh
 npm run notices
 npm run privacy:check
-npm run pack -- --config.electronDist=node_modules/electron/dist
+npm run dist
+npm run release:check
 ```
 
-Live integration scripts under `scripts/` are opt-in. They may use your account quota or connect to a server; read the script and provide explicit test inputs. CI runs unit tests/build/privacy checks only. SSH tests use `TEST_SSH_HOST`, `TEST_SSH_USER`, `TEST_SSH_KEY` or explicit CLI arguments; they never contain a real endpoint.
+Live integration scripts under `scripts/` are opt-in. They may use your account quota or connect to a server; read the script and provide explicit test inputs. CI runs unit tests/build/privacy checks; the release workflow also builds distributable assets and creates a draft for tagged versions. SSH tests use `TEST_SSH_HOST`, `TEST_SSH_USER`, `TEST_SSH_KEY` or explicit CLI arguments; they never contain a real endpoint.
 
 ## Privacy and security
 

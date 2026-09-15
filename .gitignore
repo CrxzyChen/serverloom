@@ -29,3 +29,5 @@ imported-credentials/
 # Local historical acceptance records (not public documentation)
 docs/*-verification.md
 docs/verification.md
+
+release-update/

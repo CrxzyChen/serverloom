@@ -1,5 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import UpdateSettings from './components/UpdateSettings.vue'
+import { Download } from 'lucide-vue-next'
 import SchedulerPane from './components/SchedulerPane.vue'
 import { Clock } from 'lucide-vue-next'
 import TerminalPane from './components/TerminalPane.vue'
@@ -16,6 +18,10 @@ import logo from './assets/servers-logo.svg'
 import { Minus, Copy, MessageSquare, FolderOpen, PanelRight, Maximize2, Minimize2, List, Network } from 'lucide-vue-next'
 import MarkdownMessage from './components/MarkdownMessage.vue'
 import { Server, Plus, Search, ArrowUp, Square, Activity, Settings2, Terminal, ChevronRight, ShieldCheck, CircleHelp, PanelLeft, X, Cpu, History, ArrowRight, RefreshCw } from 'lucide-vue-next'
+const updateState=ref({version:'',phase:'idle',channel:'alpha',autoCheck:true})
+const updateLabel=computed(()=>({checking:'检查更新中',available:'发现新版本',downloading:`下载更新 ${updateState.value.progress}%`,ready:'更新已就绪',waiting:'等待完成后更新',installing:'正在安装更新',error:'更新失败',current:'已是最新版本',idle:'软件更新'}[updateState.value.phase]))
+async function showUpdates(){selectNav('settings');await nextTick();document.getElementById('software-updates')?.scrollIntoView()}
+async function updateAction(name,value){try{const result=await api[name](value);if(result?.phase)updateState.value=result}catch(e){error.value=e.message}}
 const scheduleState=ref({tasks:[],runs:[],paused:false,current:null}), desktop=ref({loginStartup:false,startHidden:false})
 async function refreshSchedules(){scheduleState.value=await api.schedulerSnapshot();for(const r of scheduleState.value.runs){if(r.source==='manual'&&['failed','interrupted'].includes(r.status)){const m=messages.value.findLast(m=>m.role==='user'&&m.conversationId===r.conversationId);if(m&&!m.failed){m.failed=true;if(r.conversationId===conversationId.value)error.value=r.error}}}for(const tab of tabs.value){if(tab.kind==='schedule')tab.title=scheduleState.value.tasks.find(t=>t.id===tab.taskId)?.name||'新建定时任务'}}
 async function saveDesktop(){await perform(async()=>{try{desktop.value=await api.desktopSettings({...desktop.value})}catch(e){desktop.value=await api.desktopSettings();throw e}})}
@@ -38,7 +44,7 @@ const statusText = computed(() => ({ stopped: '未启动', starting: '正在启�
 const prompts = [ { title: '查看硬件状态', text: '查看这台服务器当前的 CPU、内存、磁盘和系统负载，并分析异常。', icon: Cpu }, { title: '制定巡检计划', text: '为这台服务器制定一份日常巡检计划。', icon: Activity }, { title: '分析故障日志', text: '我想排查服务故障，请告诉我需要提供哪些日志。', icon: Terminal } ]
 let unsubscribe, previousFocus
 async function perform(fn) { error.value = ''; busy.value = true; try { return await fn() } catch (e) { error.value = e.message } finally { busy.value = false } }
-async function load() { if (!api) return; const data = await api.load(); servers.value = data.servers; groups.value = data.groups || []; history.value = data.history; state.value = data.runtime.state; detail.value = data.runtime.detail; if (data.window) windowInfo.value = data.window; await refreshSchedules();desktop.value=await api.desktopSettings() }
+async function load() { if (!api) return; const data = await api.load(); servers.value = data.servers; groups.value = data.groups || []; history.value = data.history; state.value = data.runtime.state; detail.value = data.runtime.detail; if (data.window) windowInfo.value = data.window; await refreshSchedules();desktop.value=await api.desktopSettings();updateState.value=await api.updateSnapshot() }
 let accountRequest
 async function refreshAccount() {
   if (state.value !== 'ready') return
@@ -75,6 +81,7 @@ function approvalSummary(item){const p=item.params||{},a=p.arguments||{};return 
 async function approve(item, decision) { await perform(async () => { await api.approve(item.id, decision); approvals.value = approvals.value.filter(a => a.id !== item.id) }) }
 function onEvent(event) {
   const p = event.params || {}
+  if(event.method==='updates/changed'){updateState.value=p;return}
   if(event.method==='scheduler/changed'){refreshSchedules().catch(e=>error.value=e.message);return}
   if(event.method==='scheduler/openRun'){openRun(p.run);return}
   if (event.method === 'window/state') { windowInfo.value = p; return }
@@ -189,6 +196,7 @@ function keyResize(event, target) { if (['ArrowLeft', 'ArrowRight'].includes(eve
       <template v-for="tab in tabs" :key="tab.id"><SchedulerPane v-if="tab.kind === 'schedule'" v-show="activeTab === tab.id" :task-id="tab.taskId" :snapshot="scheduleState" :servers="servers" :sessions="sessions" :models="cp.models" @changed="refreshSchedules" @open="openSchedule" @conversation="openRun"/><ServerOverview v-else-if="tab.kind === 'overview'" v-show="activeTab === tab.id" :server="servers.find(s => s.id === tab.server.id) || tab.server" :testing="testing" @open="openTool" @edit="openEditor" @test="checkConnection" @chat="server => newChat(server.id)" @migrate="server => migration.openExport([server.id])" /><TerminalPane v-else-if="tab.kind === 'ssh'" v-show="activeTab === tab.id" :server="tab.server" :active="page === 'workspace' && activeTab === tab.id && !expanded && (windowWidth >= 980 || !copilot)" /><FilesPane v-else-if="tab.kind === 'files'" v-show="activeTab === tab.id" :server="tab.server" :initial-path="tab.path" @ask="ask" /><BandwidthPane v-else v-show="activeTab === tab.id" :server="tab.server" :active="page === 'workspace' && activeTab === tab.id && !expanded && (windowWidth >= 980 || !copilot)" @ask="ask" /></template></div>
       <section v-if="page === 'settings'" class="settings-page">
         <div class="eyebrow">ENGINE / LOCAL RUNTIME</div><h1>运行时设置</h1><p>打开客户端时自动启动 Codex 并读取已有登录状态，关闭窗口后保留托盘运行；选择“退出 ServerLoom”才会停止。</p>
+        <UpdateSettings :state="updateState" @action="updateAction"/>
         <div class="setting-row"><div><h3>后台与启动</h3><p>关闭窗口收起到托盘。定时任务需要电脑开机且应用运行。</p><label><input type="checkbox" v-model="desktop.loginStartup" @change="saveDesktop"/>登录 Windows 后启动</label><label><input type="checkbox" v-model="desktop.startHidden" @change="saveDesktop"/>登录启动时隐藏窗口</label></div><button @click="perform(()=>api.quit())">退出 ServerLoom</button></div><div class="setting-row"><div><h3>Codex runtime</h3><p>内置 codex-rs · 本地 stdio 通信</p></div><div class="setting-actions"><span class="runtime-indicator"><span class="status-dot" :class="state" />{{ statusText }}</span><button v-if="state === 'ready'" :disabled="busy" @click="stop">停止运行时</button><button v-else class="primary" :disabled="!api || busy" @click="start">{{ busy ? '启动中…' : '启动运行时' }}</button></div></div>
         <p v-if="detail" class="runtime-detail">{{ detail }}</p>
         <div class="setting-row"><div><h3>ChatGPT 账号</h3><p>{{ account ? (account.email || '已登录') : loginPending ? '请在浏览器完成登录，随后回到这里。' : '使用 Codex 的登录流程连接账号。' }}</p></div><div class="setting-actions"><button class="icon-button" aria-label="刷新登录状态" :disabled="state !== 'ready' || busy" @click="perform(refreshAccount)"><RefreshCw :size="16" /></button><button :disabled="state !== 'ready' || busy || loginPending" @click="login">{{ account ? '重新登录' : loginPending ? '等待登录…' : '登录 ChatGPT' }}</button></div></div>
@@ -210,7 +218,7 @@ function keyResize(event, target) { if (['ArrowLeft', 'ArrowRight'].includes(eve
   </div>
   <div v-if="error && !copilot" class="global-error" role="alert">{{ error }}<button @click="error = ''">关闭</button></div>
   <div v-if="savedNotice && !copilot" class="global-notice" role="status">{{ savedNotice }}<button aria-label="关闭保存提示" @click="savedNotice = ''">关闭</button></div>
-  <footer class="statusbar"><span><span class="status-dot" :class="state" />{{ state === 'ready' ? 'Runtime ready' : statusText }}</span><span>{{ servers.length }} 台服务器<span class="divider" />{{ tabs.length }} 个标签页<span class="divider" />v0.10.0-alpha.1</span><button style="font-size:11px" @click="selectNav('scheduler')">{{scheduleState.paused?'调度已暂停':scheduleState.current?'任务执行中':'Scheduler 就绪'}}</button><QuotaStatus :value="cp.limits" :error="cp.limitsError" :updated="cp.limitsAt" :loading="cp.limitsLoading" :plan="account?.planType" @refresh="cp.refreshLimits"/></footer>
+  <footer class="statusbar"><span><span class="status-dot" :class="state" />{{ state === 'ready' ? 'Runtime ready' : statusText }}</span><span>{{ servers.length }} 台服务器<span class="divider" />{{ tabs.length }} 个标签页<span class="divider" />v{{ updateState.version }}</span><button style="font-size:11px" @click="selectNav('scheduler')">{{scheduleState.paused?'调度已暂停':scheduleState.current?'任务执行中':'Scheduler 就绪'}}</button><button class="update-status" :class="{highlight:['available','ready','waiting'].includes(updateState.phase)}" :title="updateLabel" aria-label="软件更新" @click="showUpdates()"><Download :size="14"/><span>{{updateLabel}}</span></button><QuotaStatus :value="cp.limits" :error="cp.limitsError" :updated="cp.limitsAt" :loading="cp.limitsLoading" :plan="account?.planType" @refresh="cp.refreshLimits"/></footer>
     <dialog ref="editor" @cancel.prevent="closeEditor">
       <form @submit.prevent="save">
         <div class="dialog-header"><h2>{{ form.id ? '编辑服务器' : '添加服务器' }}</h2><button type="button" aria-label="关闭服务器表单" @click="closeEditor"><X :size="18" /></button></div>

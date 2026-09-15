@@ -1,4 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Tray, Menu, Notification, powerMonitor } = require('electron')
+const { Updates } = require('./updates.cjs')
+const { existsSync } = require('node:fs')
+const { mkdir, writeFile } = require('node:fs/promises')
 const { join } = require('node:path')
 const { Runtime } = require('./runtime.cjs')
 const { Store } = require('./store.cjs')
@@ -12,18 +15,23 @@ const { scheduleTools, executeScheduleTool } = require('./schedule-tools.cjs')
 const { ScheduleApprovals } = require('./schedule-approvals.cjs')
 const { Scheduler } = require('./scheduler.cjs')
 const { createExecutor } = require('./scheduled-executor.cjs')
-let scheduler, tray, quitting = false, quitReady = false
+let updates, scheduler, tray, quitting = false, quitReady = false
 const { Migration } = require('./migration.cjs')
 let window, runtime, store, workbench, migration, attachments, copilot, migrationBusy = false, active = null, sending = false
 const threads = new Map()
 const connectionChecks = new Set()
+const updateOperations = new Set()
+const updateProtected = /^(workbench:(open|input|list|preview|transfer|bandwidth)|server:test|migration:|runtime:(start|login)|attachments:add)/
 const dev = !app.isPackaged && process.env.SERVERS_DEV === '1'
 function windowState() { return { maximized: !!window?.isMaximized(), focused: !!window?.isFocused(), fullscreen: !!window?.isFullScreen() } }
 if (process.env.SERVERS_TEST_DATA && !app.isPackaged) app.setPath('userData', process.env.SERVERS_TEST_DATA)
 function handle(channel, fn) {
-  ipcMain.handle(channel, (event, ...args) => {
+  ipcMain.handle(channel, async (event, ...args) => {
     if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Untrusted IPC sender')
-    return fn(...args)
+    if (!updateProtected.test(channel)) return fn(...args)
+    if (updates?.blockNew) throw new Error('正在等待更新，新操作已暂停；可在更新设置中取消等待')
+    const operation = Symbol(channel); updateOperations.add(operation)
+    try { return await fn(...args) } finally { updateOperations.delete(operation) }
   })
 }
 const primaryInstance = app.requestSingleInstanceLock()
@@ -198,6 +206,41 @@ if (primaryInstance) app.whenReady().then(async () => {
     } finally { sending = false }
   }
   scheduler = new Scheduler(store, createExecutor(runtime, submit, store), () => { window?.webContents.send('runtime:event', {method:'scheduler/changed',params:{}}); void updateTray() }, (run,title,body) => { if (Notification.isSupported()) { const notification = new Notification({title:`ServerLoom · ${title}`,body}); notification.on('click',()=>{window?.show();window?.focus();window?.webContents.send('runtime:event',{method:'scheduler/openRun',params:{run}})}); notification.show() } })
+  const installed = app.isPackaged && process.platform === 'win32' && existsSync(join(require('node:path').dirname(app.getPath('exe')), 'Uninstall ServerLoom.exe'))
+  const autoUpdater = installed ? require('electron-updater').autoUpdater : null
+  updates = new Updates({ version: app.getVersion(), installed, updater: autoUpdater, store,
+    fetch: (...args) => require('electron').net.fetch(...args),
+    emit: params => window?.webContents.send('runtime:event', { method: 'updates/changed', params }),
+    activity: () => ({ tasks: Number(!!scheduler.current || scheduler.draining || scheduler.ticking || !!active || sending), operations: updateOperations.size + connectionChecks.size + Number(migrationBusy), sessions: workbench.sessions.size }),
+    suspend: () => scheduler.suspendForUpdate(), resume: () => scheduler.resumeAfterUpdate(),
+    confirm: async status => {
+      const choice = await dialog.showMessageBox(window, { type: 'question', buttons: ['稍后', '完成后重启并更新'], defaultId: 0, cancelId: 0,
+        message: '安装更新需要重启 ServerLoom', detail: `等待当前任务与文件操作完成后重启。${status.sessions} 个 SSH / 文件连接将断开，排队任务将在重启后恢复。等待期间不接受新任务；可取消等待。` })
+      return choice.response === 1
+    },
+    install: async () => {
+      await scheduler.preserveForUpdate()
+      const backupDirectory = join(app.getPath('userData'), 'update-backups')
+      await mkdir(backupDirectory, { recursive: true })
+      await store.update(async data => { await writeFile(join(backupDirectory, `before-${app.getVersion()}-${Date.now()}.json`), JSON.stringify(data), { mode: 0o600, flag: 'wx' }) })
+      await new Promise((resolve, reject) => {
+        const nativeUpdater = require('electron').autoUpdater
+        const cleanup = () => { autoUpdater.removeListener('error', failure); nativeUpdater.removeListener('before-quit-for-update', before) }
+        const failure = error => { cleanup(); reject(error) }
+        const before = () => { cleanup(); resolve() }
+        autoUpdater.once('error', failure)
+        nativeUpdater.once('before-quit-for-update', before)
+        try { autoUpdater.quitAndInstall(false, true) } catch (error) { failure(error) }
+      })
+    }
+  })
+  handle('updates:snapshot', () => updates.snapshot())
+  handle('updates:settings', value => updates.settings(value))
+  handle('updates:check', () => updates.check())
+  handle('updates:download', () => updates.download())
+  handle('updates:install', () => updates.requestInstall())
+  handle('updates:cancel', () => updates.cancel())
+  handle('updates:release', () => shell.openExternal(updates.state.available?.url || require('./updates.cjs').RELEASES))
   handle('runtime:send', value => scheduler.manual(value))
   handle('scheduler:snapshot', () => scheduler.snapshot())
   handle('scheduler:save', value => scheduler.save(value))
@@ -243,6 +286,7 @@ if (primaryInstance) app.whenReady().then(async () => {
   await runtime.start().catch(error => runtime.status('error', error.message))
   await scheduler.init()
   await updateTray()
+  await updates.init()
   powerMonitor.on('resume',()=>scheduler.tick().catch(error=>runtime.status('error',error.message)))
   // Own runtime lifetime in the main process; renderer reloads must not spawn it again.
   // Runtime has started before recovery and schedule dispatch.
@@ -251,7 +295,8 @@ if (primaryInstance) app.whenReady().then(async () => {
 app.on('before-quit', event => {
   if(quitReady)return
   event.preventDefault(); if(quitting)return; quitting=true
+  updates?.dispose()
   runtime?.stop();workbench?.closeAll();for(const controller of connectionChecks)controller.abort()
-  Promise.resolve(scheduler?.shutdown()).finally(()=>{quitReady=true;tray?.destroy();app.quit()})
+  Promise.resolve(updates?.state.phase === 'installing' ? store?.queue : scheduler?.shutdown()).finally(()=>{quitReady=true;tray?.destroy();app.quit()})
 })
 app.on('window-all-closed', () => { if(!tray)app.quit() })

@@ -9,6 +9,30 @@ const { Migration, seal, unseal, validatePayload } = require('../electron/migrat
 const pass = 'test-only-password-8132'
 const config = { name: 'fixture', host: 'example.invalid', user: 'tester', port: 22, authType: 'privateKey', group: 'Lab' }
 const hosts = [{ type: 'ssh-ed25519', data: Buffer.alloc(40, 7).toString('base64') }]
+// Independent historical encoder: do not reuse the implementation's protocol constants.
+async function historicalSeal(payload, passphrase, brand) {
+ const { randomBytes, scryptSync, createCipheriv } = require('node:crypto')
+ const salt=randomBytes(16),iv=randomBytes(12),key=scryptSync(passphrase,salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024})
+ try { const cipher=createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(`${brand} migration v1 / scrypt-32768-8-1 / AES-256-GCM`));const data=Buffer.concat([cipher.update(JSON.stringify(payload)),cipher.final()]);return Buffer.from(JSON.stringify({format:'servers-encrypted',version:1,salt:salt.toString('base64'),iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),data:data.toString('base64')})) } finally {key.fill(0)}
+}
+test('imports original Servers and renamed alpha packages with the same exact password', async () => {
+ const payload={version:1,servers:[{config}]},phrase=' 空格与中文 test-password '
+ const {dir,store}=await fixture(),migration=new Migration(store,join(dir,'credentials'),async()=>[])
+ try {for(const brand of ['Servers','ServerLoom']){
+  const bytes=await historicalSeal(payload,phrase,brand),file=join(dir,brand+'.servers');await writeFile(file,bytes)
+  const staged=await migration.stage(file),preview=await migration.preview(staged.token,phrase)
+  assert.equal(preview.rows[0].config.host,'example.invalid')
+  await assert.rejects(unseal(bytes,phrase.trim()),/完整性校验/)
+  const tampered=JSON.parse(bytes);tampered.tag=Buffer.alloc(16).toString('base64')
+  await assert.rejects(unseal(Buffer.from(JSON.stringify(tampered)),phrase),/完整性校验/)
+ }}finally{migration.clear()}
+})
+test('new exports preserve original immutable protocol identity and reject unknown contexts', async () => {
+ const {scryptSync,createDecipheriv}=require('node:crypto'),payload={version:1,servers:[{config}]},e=JSON.parse(await seal(payload,pass))
+ const key=scryptSync(pass,Buffer.from(e.salt,'base64'),32,{N:32768,r:8,p:1,maxmem:64*1024*1024})
+ try {const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(e.iv,'base64'));cipher.setAAD(Buffer.from('Servers migration v1 / scrypt-32768-8-1 / AES-256-GCM'));cipher.setAuthTag(Buffer.from(e.tag,'base64'));assert.deepEqual(JSON.parse(Buffer.concat([cipher.update(Buffer.from(e.data,'base64')),cipher.final()]).toString()),payload)}finally{key.fill(0)}
+ await assert.rejects(unseal(await historicalSeal(payload,pass,'Unknown'),pass),/完整性校验/)
+})
 async function fixture() { const dir = await mkdtemp(join(tmpdir(), 'servers-migration-')); const store = new Store(join(dir, 'store.json')); return { dir, store } }
 test('group lifecycle migrates old labels and preserves servers', async () => {
  const { dir, store } = await fixture(); await writeFile(join(dir, 'store.json'), JSON.stringify({ servers: [{ ...config, id: 'old' }], history: [] })); const first = await store.read(); const id = first.groups[0].id; assert.equal((await store.read()).groups[0].id, id)

@@ -6,7 +6,11 @@ const { join, basename } = require('node:path')
 const { homedir } = require('node:os')
 const { validateServer, assignGroup } = require('./store.cjs')
 const derive = promisify(scrypt), exec = promisify(execFile)
-const LIMIT = 12 * 1024 * 1024, AAD = Buffer.from('ServerLoom migration v1 / scrypt-32768-8-1 / AES-256-GCM')
+const LIMIT = 12 * 1024 * 1024
+// Protocol identity is immutable, even when the product is renamed.
+const AAD = Buffer.from('Servers migration v1 / scrypt-32768-8-1 / AES-256-GCM')
+// alpha.1/alpha.2 accidentally used the new brand without changing format version.
+const READ_AADS = [AAD, Buffer.from('ServerLoom migration v1 / scrypt-32768-8-1 / AES-256-GCM')]
 function password(value) { if (typeof value !== 'string' || value.length < 10 || value.length > 256) throw new Error('连接包口令应为 10–256 个字符') }
 async function keyFor(value, salt) { password(value); return derive(value, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }) }
 function decode(value, length) { if (typeof value !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error('连接包格式无效'); const b = Buffer.from(value, 'base64'); if ((length && b.length !== length) || b.toString('base64') !== value) throw new Error('连接包格式无效'); return b }
@@ -20,7 +24,21 @@ async function unseal(bytes, passphrase) {
   if (envelope.format !== 'servers-encrypted' || envelope.version !== 1) throw new Error('不支持的连接包版本')
   const salt = decode(envelope.salt, 16), iv = decode(envelope.iv, 12), tag = decode(envelope.tag, 16), data = decode(envelope.data)
   const key = await keyFor(passphrase, salt)
-  try { const cipher = createDecipheriv('aes-256-gcm', key, iv); cipher.setAAD(AAD); cipher.setAuthTag(tag); const plain = Buffer.concat([cipher.update(data), cipher.final()]); try { return JSON.parse(plain.toString('utf8')) } finally { plain.fill(0) } } catch { throw new Error('解密失败：口令错误或连接包已损坏') } finally { key.fill(0) }
+  try {
+    for (const aad of READ_AADS) {
+      const cipher = createDecipheriv('aes-256-gcm', key, iv)
+      cipher.setAAD(aad); cipher.setAuthTag(tag)
+      let partial, tail, plain
+      try {
+        partial = cipher.update(data)
+        try { tail = cipher.final() } catch { continue }
+        plain = Buffer.concat([partial, tail])
+        try { return JSON.parse(plain.toString('utf8')) }
+        catch { throw new Error('连接包已通过口令校验，但内容格式无效') }
+      } finally { partial?.fill(0); tail?.fill(0); plain?.fill(0) }
+    }
+    throw new Error('解密失败：口令不匹配或连接包未通过完整性校验；请核对导出文件和口令（含空格）')
+  } finally { key.fill(0) }
 }
 function target(s) { const host = s.host.replace(/^\[|\]$/g, ''); return s.port === 22 ? host : `[${host}]:${s.port}` }
 function endpoint(s) { return `${s.host.replace(/^\[|\]$/g, '').toLowerCase()}|${s.port}|${s.user}` }

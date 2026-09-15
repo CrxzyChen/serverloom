@@ -51,3 +51,26 @@ test('timeout interrupts a run and records the timeout reason',async t=>{
   for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r))
   const run=(await scheduler.snapshot()).runs[0];assert.equal(run.status,'interrupted');assert.match(run.error,/超时/);await scheduler.shutdown()
 })
+
+
+test('update hold finishes current run, preserves queued work and resumes only proven queued runs', async () => {
+  const store=new MemoryStore();let finish;const calls=[]
+  const first=new Scheduler(store,async run=>{calls.push(run.id);await new Promise(r=>{finish=r});return{text:'done'}})
+  await first.init();await first.manual({conversationId:'one',text:'first'})
+  await until(()=>!!finish);const second=await first.manual({conversationId:'two',text:'second'})
+  first.suspendForUpdate();await assert.rejects(()=>first.manual({conversationId:'three',text:'blocked'}),/更新/)
+  finish();await until(()=>!first.draining);assert.equal(calls.length,1)
+  await first.preserveForUpdate();clearInterval(first.timer)
+  await store.update(d=>d.runs.push({id:'uncertain',status:'running'}))
+  const restored=new Scheduler(store,async run=>{calls.push(run.id);return{text:'resumed'}})
+  await restored.init();await until(async()=>(await restored.snapshot()).runs.find(r=>r.id===second.runId)?.status==='completed')
+  assert.equal(calls.length,2);assert.equal((await restored.snapshot()).runs.find(r=>r.id==='uncertain').status,'interrupted')
+  assert.equal((await store.read()).scheduler.updateResume,undefined);await restored.shutdown()
+})
+
+test('cancel update hold resumes queue without changing persistent scheduler pause', async()=>{
+  const store=new MemoryStore({scheduler:{paused:true}}),scheduler=new Scheduler(store,async()=>({text:'ok'}))
+  await scheduler.init();scheduler.suspendForUpdate();await assert.rejects(()=>scheduler.runNow('missing'),/更新/)
+  await scheduler.resumeAfterUpdate();assert.equal((await scheduler.snapshot()).paused,true)
+  const run=await scheduler.manual({conversationId:'manual',text:'resume'});await until(async()=>(await scheduler.snapshot()).runs.find(r=>r.id===run.runId)?.status==='completed');await scheduler.shutdown()
+})

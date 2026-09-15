@@ -56,3 +56,4 @@
 .task-state{max-height:min(42vh,max(48px,calc(100dvh - 440px)))}.copilot-chat .composer-area{flex-shrink:0}.attachment-chips{max-height:76px;overflow:auto}.quota-status>button{min-height:23px}.composer-menu{overscroll-behavior:contain}.task-state-body .markdown h2{font-size:15px}
 
 .copilot-chat .approval pre{max-height:100px;overflow:auto;margin:8px 0}.copilot-chat .approval p{font-size:12px;margin:6px 0}.copilot-chat .approval>div{position:sticky;bottom:0;background:var(--raised);padding-top:5px}
+.update-status{display:flex;align-items:center;gap:6px;min-height:24px;font-size:11px;background:transparent;border:0}.update-status.highlight{color:var(--accent)}@media(max-width:1200px){.update-status span{display:none}}

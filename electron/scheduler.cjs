@@ -42,7 +42,7 @@ function validateTask(v, data, now) {
 class Scheduler {
   constructor(store, execute, changed = () => {}, notify = () => {}, clock = Date.now) { Object.assign(this, { store, execute, changed, notify, clock }); this.stopping = false; this.draining = false; this.ticking = false; this.current = null }
   async init() {
-    await this.store.update(d => { d.schedules ||= []; d.runs ||= []; d.scheduler ||= { paused: false }; for (const r of d.runs) if (LIVE.has(r.status)) Object.assign(r, { status: 'interrupted', endedAt: iso(this.clock()), error: '应用上次退出时任务未完成；请检查结果后手动重试，未自动重放。' }) })
+    await this.store.update(d => { d.schedules ||= []; d.runs ||= []; d.scheduler ||= { paused: false }; for (const r of d.runs) if (LIVE.has(r.status) && !(r.status === 'queued' && d.scheduler.updateResume?.includes(r.id))) Object.assign(r, { status: 'interrupted', endedAt: iso(this.clock()), error: '应用上次退出时任务未完成；请检查结果后手动重试，未自动重放。' }); delete d.scheduler.updateResume })
     await this.tick(); this.timer = setInterval(() => this.tick().catch(e => this.changed({ error: e.message })), 15000); this.timer.unref?.()
   }
   async snapshot() { const d = await this.store.read(); return { tasks: d.schedules || [], runs: d.runs || [], paused: !!d.scheduler?.paused, current: this.current?.id || null } }
@@ -54,19 +54,27 @@ class Scheduler {
   async enable(id, enabled) { if (typeof enabled !== 'boolean') throw new Error('状态无效'); await this.store.update(d => { const t = d.schedules?.find(t => t.id === id); if (!t) throw new Error('任务不存在'); t.enabled = enabled; t.nextRunAt = enabled ? nextRun(t.rule,t.timezone,this.clock()) : null; if (enabled && !t.nextRunAt) throw new Error('执行时间已过，请编辑时间') }); this.changed() }
   async pause(paused) { if (typeof paused !== 'boolean') throw new Error('状态无效'); await this.store.update(d => { d.scheduler = { ...d.scheduler, paused } }); this.changed(); if (!paused) await this.tick() }
   createRun(task, at, source = 'schedule') { return { id: randomUUID(), scheduleId: task.id, name: task.name, scheduledAt: at, createdAt: iso(this.clock()), status: 'queued', source, conversationId: task.conversationMode === 'existing' ? task.conversationId : randomUUID(), task: structuredClone(task), result: '' } }
-  async runNow(id) { const r = await this.store.update(d => { const t = d.schedules?.find(t => t.id === id); if (!t) throw new Error('任务不存在'); if (d.runs.some(r => r.scheduleId === id && LIVE.has(r.status))) throw new Error('此任务已在队列中'); const r = this.createRun(t, iso(this.clock()), 'runNow'); d.runs.push(r); return r }); this.changed(); void this.drain(); return r }
+  assertAccepting() { if (this.updateHold || this.stopping) throw new Error('正在准备更新，请稍后重试或取消等待更新') }
+  suspendForUpdate() { this.updateHold = true }
+  async resumeAfterUpdate() { this.updateHold = false; this.stopping = false; await this.store.update(d => { if(d.scheduler) delete d.scheduler.updateResume }); await this.tick() }
+  async preserveForUpdate() {
+    if (this.current || this.draining || this.ticking) throw new Error('任务仍在结束中')
+    await this.store.update(d => { d.scheduler ||= {}; d.scheduler.updateResume = (d.runs || []).filter(r => r.status === 'queued').map(r => r.id) })
+  }
+  async runNow(id) { this.assertAccepting(); const r = await this.store.update(d => { this.assertAccepting(); const t = d.schedules?.find(t => t.id === id); if (!t) throw new Error('任务不存在'); if (d.runs.some(r => r.scheduleId === id && LIVE.has(r.status))) throw new Error('此任务已在队列中'); const r = this.createRun(t, iso(this.clock()), 'runNow'); d.runs.push(r); return r }); this.changed(); void this.drain(); return r }
   async manual(value) {
+    this.assertAccepting()
     if (!value || typeof value.text !== 'string' || value.text.length > 30000 || (!value.text.trim() && !value.attachments?.length) || !/^[a-zA-Z0-9-]{1,64}$/.test(value.conversationId || '')) throw new Error('会话或任务内容无效')
     const r = { id: randomUUID(), source: 'manual', conversationId: value.conversationId, name: value.text.slice(0,100) || '附件', createdAt: iso(this.clock()), status: 'queued', value: structuredClone(value), result: '' }
-    await this.store.update(d => { d.runs ||= []; if (d.runs.filter(r => LIVE.has(r.status)).length >= 100) throw new Error('队列已满'); d.runs.push(r) }); this.changed(); void this.drain(); return { queued: true, runId: r.id }
+    await this.store.update(d => { this.assertAccepting(); d.runs ||= []; if (d.runs.filter(r => LIVE.has(r.status)).length >= 100) throw new Error('队列已满'); d.runs.push(r) }); this.changed(); void this.drain(); return { queued: true, runId: r.id }
   }
   async tick() {
-    if (this.stopping || this.ticking) return
+    if (this.stopping || this.updateHold || this.ticking) return
     this.ticking = true
     try {
       const now = this.clock(), data = await this.store.read()
       if (!data.scheduler?.paused && data.schedules?.some(t => t.enabled && t.nextRunAt && Date.parse(t.nextRunAt) <= now)) {
-        await this.store.update(d => { if (d.scheduler?.paused) return; for (const t of d.schedules || []) {
+        await this.store.update(d => { if (d.scheduler?.paused || this.updateHold) return; for (const t of d.schedules || []) {
           if (!t.enabled || !t.nextRunAt || Date.parse(t.nextRunAt) > now) continue
           const at = t.nextRunAt, late = now - Date.parse(at) > 60000
           const duplicate = d.runs.some(r => r.scheduleId === t.id && (LIVE.has(r.status) || (r.source === 'schedule' && r.scheduledAt === at)))
@@ -79,12 +87,12 @@ class Scheduler {
   }
   async patch(id, value) { await this.store.update(d => { const r = d.runs.find(r => r.id === id); if (r) Object.assign(r,value) }); this.changed() }
   async drain() {
-    if (this.draining || this.stopping) return
+    if (this.draining || this.stopping || this.updateHold) return
     this.draining = true
     try {
-      while (!this.stopping) {
+      while (!this.stopping && !this.updateHold) {
         const d = await this.store.read(), run = d.runs?.find(r => r.status === 'queued' && (!d.scheduler?.paused || r.source !== 'schedule'))
-        if (!run) break
+        if (!run || this.updateHold || this.stopping) break
         const controller = new AbortController(); this.current = { ...run, controller }
         await this.patch(run.id, { status: 'running', startedAt: iso(this.clock()) })
         const timer = setTimeout(() => controller.abort(new Error('执行超时，已停止；请检查远端状态后重试')), (run.task?.timeoutMinutes || 60) * 60000)
